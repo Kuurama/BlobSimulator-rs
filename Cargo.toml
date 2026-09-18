@@ -8,6 +8,7 @@ num-traits = "0.2.19"
 rand = "0.10.2"
 rayon = "1.12.0"
 softbuffer = "0.4.8"
+thiserror = "2.0.20"
 winit = "0.31.0-beta.3"
 
 [lints.clippy]

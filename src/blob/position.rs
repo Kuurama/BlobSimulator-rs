@@ -8,8 +8,8 @@ pub struct Position {
 impl Default for Position {
     fn default() -> Self {
         Self {
-            x: f32::from(SIM_WIDTH) / 2f32,
-            y: f32::from(SIM_HEIGHT) / 2f32,
+            x: f32::from(SIM_WIDTH.get()) / 2f32,
+            y: f32::from(SIM_HEIGHT.get()) / 2f32,
         }
     }
 }
