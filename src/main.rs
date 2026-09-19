@@ -27,14 +27,14 @@ const WINDOW_HEIGHT: NonZero<u16> = NonZero::new(144).unwrap();
 const SCREEN_RATIO: f32 = (WINDOW_WIDTH.get() as f32) / (WINDOW_HEIGHT.get() as f32);*/
 
 #[allow(clippy::unwrap_used, reason = "checked at compile time")]
-const SIM_SCALE_MULTIPLIER: NonZero<u16> = NonZero::new(6).unwrap();
+const SIM_SCALE_MULTIPLIER: NonZero<u16> = NonZero::new(10).unwrap();
 const SIM_WIDTH: NonZero<u16> = WINDOW_WIDTH.saturating_mul(SIM_SCALE_MULTIPLIER);
 const SIM_HEIGHT: NonZero<u16> = WINDOW_HEIGHT.saturating_mul(SIM_SCALE_MULTIPLIER);
 
 #[allow(clippy::as_conversions, reason = "u16 always fits in usize")]
 const SIM_SIZE: usize = (SIM_WIDTH.get() as usize) * (SIM_HEIGHT.get() as usize);
 
-const BLOB_COUNT: u32 = 1_000_000;
+const BLOB_COUNT: u32 = 250_000;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let event_loop = EventLoop::new()?;
@@ -50,6 +50,7 @@ struct App {
     surface: Option<Surface<OwnedDisplayHandle, Box<dyn Window>>>,
     blob_group: BlobGroup,
     trail_map: Box<[u32]>,
+    iteration_count: u32,
 }
 
 impl ApplicationHandler for App {
@@ -91,7 +92,7 @@ impl ApplicationHandler for App {
             }
         };
 
-        self.blob_group = match BlobGroup::create_in_circle(BLOB_COUNT, 200) {
+        self.blob_group = match BlobGroup::create_in_circle(BLOB_COUNT, 250) {
             Ok(group) => group,
             Err(error) => {
                 eprintln!("Failed to create the blobs: {error}");
@@ -133,7 +134,7 @@ impl ApplicationHandler for App {
                         .trail_map
                         .get_mut(y.mul_add(usize::from(SIM_WIDTH.get()), x))
                     {
-                        *pixel = 0x0020_3040;
+                        *pixel = blob.displayed_color();
                     } else {
                         eprintln!("Blob shouldn't go outside the Simulation bounds");
                         event_loop.exit();
@@ -154,6 +155,13 @@ impl ApplicationHandler for App {
 
                 let source: &[u32] = &self.trail_map;
                 let destination: &mut [u32] = &mut buffer;
+
+                let evaporation = if self.iteration_count % 2 == 0 {
+                    EVAPORATION
+                } else {
+                    0
+                };
+                self.iteration_count += 1;
 
                 destination.par_iter_mut().enumerate().for_each(|tuple| {
                     let (i, pixel) = tuple;
@@ -203,9 +211,21 @@ impl ApplicationHandler for App {
 
                     *pixel = u32::from_be_bytes([
                         0,
-                        totals[1].saturating_div(count).saturating_sub(u16::from(EVAPORATION)).to_u8().unwrap(),
-                        totals[2].saturating_div(count).saturating_sub(u16::from(EVAPORATION)).to_u8().unwrap(),
-                        totals[3].saturating_div(count).saturating_sub(u16::from(EVAPORATION)).to_u8().unwrap(),
+                        totals[1]
+                            .saturating_div(count)
+                            .saturating_sub(u16::from(evaporation))
+                            .to_u8()
+                            .unwrap(),
+                        totals[2]
+                            .saturating_div(count)
+                            .saturating_sub(u16::from(evaporation))
+                            .to_u8()
+                            .unwrap(),
+                        totals[3]
+                            .saturating_div(count)
+                            .saturating_sub(u16::from(evaporation))
+                            .to_u8()
+                            .unwrap(),
                     ]);
                 });
 

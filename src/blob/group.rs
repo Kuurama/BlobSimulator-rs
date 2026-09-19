@@ -3,7 +3,7 @@ use crate::blob::group::BlobGroupError::{CountTooBig, RadiusTooLarge};
 use crate::blob::position::Position;
 use crate::{SIM_HEIGHT, SIM_WIDTH};
 use num_traits::ToPrimitive;
-use std::f32::consts::{GOLDEN_RATIO, TAU};
+use std::f32::consts::{GOLDEN_RATIO, PI, TAU};
 use thiserror::Error;
 
 #[derive(Default)]
@@ -50,6 +50,7 @@ impl BlobGroup {
                             x: center.x + distance * angle_cos,
                             y: center.y + distance * angle_sin,
                         },
+                        angle: (angle + PI).rem_euclid(TAU),
                         ..Default::default()
                     })
                 })

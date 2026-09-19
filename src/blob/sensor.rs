@@ -9,7 +9,7 @@ pub struct Sensor {
 impl Default for Sensor {
     fn default() -> Self {
         Self {
-            size: 1,
+            size: 2,
             angle_spacing: PI / 6f32,
             offset_distance: 20,
         }

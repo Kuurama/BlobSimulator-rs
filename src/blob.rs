@@ -1,5 +1,5 @@
 use self::settings::BlobSettings;
-use crate::{SIM_HEIGHT, SIM_SIZE, SIM_WIDTH};
+use crate::{SIM_HEIGHT, SIM_WIDTH};
 use num_traits::ToPrimitive;
 use rand::{Rng, RngExt};
 use std::f32::consts::{PI, TAU};
@@ -23,6 +23,20 @@ impl Blob {
     #[must_use]
     pub const fn position(&self) -> &Position {
         &self.position
+    }
+
+    #[must_use]
+    pub fn displayed_color(&self) -> u32 {
+        let direction_x = self.angle.cos();
+        let [red, green, blue] = self.settings.color().map(|rgb_channel| {
+            let spacing = rgb_channel.min(u8::MAX - rgb_channel);
+            let value = f32::from(rgb_channel) + direction_x * f32::from(spacing);
+
+            // Keep the base rgb_channel if the angle is not finite.
+            value.to_u8().unwrap_or(rgb_channel)
+        });
+
+        u32::from_be_bytes([0, red, green, blue])
     }
 
     pub fn next_step(&mut self, trail_map: &[u32], rng: &mut impl Rng) {
