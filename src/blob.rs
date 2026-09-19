@@ -25,7 +25,7 @@ impl Blob {
         &self.position
     }
 
-    pub fn next_step(&mut self, trail_map: &[u32; SIM_SIZE], rng: &mut impl Rng) {
+    pub fn next_step(&mut self, trail_map: &[u32], rng: &mut impl Rng) {
         self.recalculate_angle(trail_map, rng);
         self.r#move(rng);
     }
@@ -50,7 +50,7 @@ impl Blob {
         self.position.y = pos_y;
     }
 
-    fn recalculate_angle(&mut self, trail_map: &[u32; SIM_SIZE], rng: &mut impl Rng) {
+    fn recalculate_angle(&mut self, trail_map: &[u32], rng: &mut impl Rng) {
         let (forward_weight, left_weight, right_weight) = (
             self.sense(trail_map, 0f32),
             self.sense(trail_map, self.settings.sensor().angle_spacing()),
@@ -71,7 +71,7 @@ impl Blob {
         };
     }
 
-    fn sense(&self, trail_map: &[u32; SIM_SIZE], angle_offset: f32) -> Option<f32> {
+    fn sense(&self, trail_map: &[u32], angle_offset: f32) -> Option<f32> {
         let sensor_angle = self.angle + angle_offset;
         let (direction_y, direction_x) = sensor_angle.sin_cos();
 

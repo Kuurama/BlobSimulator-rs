@@ -3,6 +3,9 @@ name = "blob-simulator-rs"
 version = "0.1.0"
 edition = "2024"
 
+[profile.dev]
+opt-level = 1
+
 [dependencies]
 num-traits = "0.2.19"
 rand = "0.10.2"

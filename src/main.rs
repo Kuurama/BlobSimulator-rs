@@ -1,7 +1,9 @@
+use rayon::iter::IndexedParallelIterator;
 pub mod blob;
 
 use crate::blob::{BlobGroup, Position};
 use num_traits::{MulAdd, ToPrimitive};
+use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 use softbuffer::Surface;
 use std::error::Error;
 use std::num::NonZero;
@@ -32,7 +34,7 @@ const SIM_HEIGHT: NonZero<u16> = WINDOW_HEIGHT.saturating_mul(SIM_SCALE_MULTIPLI
 #[allow(clippy::as_conversions, reason = "u16 always fits in usize")]
 const SIM_SIZE: usize = (SIM_WIDTH.get() as usize) * (SIM_HEIGHT.get() as usize);
 
-const BLOB_COUNT: u16 = 10_000;
+const BLOB_COUNT: u32 = 1_000_000;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let event_loop = EventLoop::new()?;
@@ -47,6 +49,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 struct App {
     surface: Option<Surface<OwnedDisplayHandle, Box<dyn Window>>>,
     blob_group: BlobGroup,
+    trail_map: Box<[u32]>,
 }
 
 impl ApplicationHandler for App {
@@ -76,6 +79,8 @@ impl ApplicationHandler for App {
                     event_loop.exit();
                     return;
                 }
+
+                self.trail_map = surface.buffer_mut().unwrap().to_vec().into_boxed_slice();
 
                 Some(surface)
             }
@@ -113,6 +118,31 @@ impl ApplicationHandler for App {
 
                 surface.window().pre_present_notify();
 
+                self.blob_group.blobs.par_iter_mut().for_each_init(
+                    || rand::rng(),
+                    |rng, blob| blob.next_step(&self.trail_map, rng),
+                );
+
+                for blob in &self.blob_group.blobs {
+                    let Position { x, y } = blob.position();
+                    let (Some(x), Some(y)) = (x.to_usize(), y.to_usize()) else {
+                        continue;
+                    };
+
+                    if let Some(pixel) = self
+                        .trail_map
+                        .get_mut(y.mul_add(usize::from(SIM_WIDTH.get()), x))
+                    {
+                        *pixel = 0x0020_3040;
+                    } else {
+                        eprintln!("Blob shouldn't go outside the Simulation bounds");
+                        event_loop.exit();
+                        return;
+                    }
+                }
+
+                const EVAPORATION: u8 = 1;
+
                 let mut buffer = match surface.buffer_mut() {
                     Ok(buffer) => buffer,
                     Err(error) => {
@@ -122,21 +152,64 @@ impl ApplicationHandler for App {
                     }
                 };
 
-                for blob in &self.blob_group.blobs {
-                    let Position { x, y } = blob.position();
-                    let (Some(x), Some(y)) = (x.to_usize(), y.to_usize()) else {
-                        continue;
-                    };
+                let source: &[u32] = &self.trail_map;
+                let destination: &mut [u32] = &mut buffer;
 
-                    if let Some(pixel) = buffer.get_mut(y.mul_add(usize::from(SIM_WIDTH.get()), x))
-                    {
-                        *pixel = 0x0020_3040;
-                    } else {
-                        eprintln!("Blob shouldn't go outside the Simulation bounds");
-                        event_loop.exit();
-                        return;
-                    }
-                }
+                destination.par_iter_mut().enumerate().for_each(|tuple| {
+                    let (i, pixel) = tuple;
+
+                    let totals = [
+                        // Top-left
+                        i.checked_sub(1 + usize::from(SIM_WIDTH.get()))
+                            .and_then(|x| source.get(x)),
+                        // Top-middle
+                        i.checked_sub(usize::from(SIM_WIDTH.get()))
+                            .and_then(|x| source.get(x)),
+                        // Top-right
+                        i.checked_add(1)
+                            .and_then(|x| x.checked_sub(usize::from(SIM_WIDTH.get())))
+                            .and_then(|x| source.get(x)),
+                        // Center-left
+                        i.checked_sub(1).and_then(|x| source.get(x)),
+                        // Center-middle
+                        source.get(i),
+                        // Center-right
+                        i.checked_add(1).and_then(|x| source.get(x)),
+                        // Bottom-left
+                        i.checked_sub(1)
+                            .and_then(|x| x.checked_add(usize::from(SIM_WIDTH.get())))
+                            .and_then(|x| source.get(x)),
+                        // Bottom-middle
+                        i.checked_add(usize::from(SIM_WIDTH.get()))
+                            .and_then(|x| source.get(x)),
+                        // Bottom-right
+                        i.checked_add(1 + usize::from(SIM_WIDTH.get()))
+                            .and_then(|x| source.get(x)),
+                    ]
+                    .iter()
+                    .flatten()
+                    .fold([0u16; 4], |acc, elem| {
+                        let [_, red, green, blue] = elem.to_be_bytes();
+                        [
+                            // Store count as [0]
+                            acc[0] + 1,
+                            acc[1] + u16::from(red),
+                            acc[2] + u16::from(green),
+                            acc[3] + u16::from(blue),
+                        ]
+                    });
+
+                    let count = totals[0];
+
+                    *pixel = u32::from_be_bytes([
+                        0,
+                        totals[1].saturating_div(count).saturating_sub(u16::from(EVAPORATION)).to_u8().unwrap(),
+                        totals[2].saturating_div(count).saturating_sub(u16::from(EVAPORATION)).to_u8().unwrap(),
+                        totals[3].saturating_div(count).saturating_sub(u16::from(EVAPORATION)).to_u8().unwrap(),
+                    ]);
+                });
+
+                self.trail_map.copy_from_slice(&buffer);
 
                 if let Err(error) = buffer.present() {
                     eprintln!("Failed to present: {error}");
