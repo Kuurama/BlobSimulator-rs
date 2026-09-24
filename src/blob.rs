@@ -1,5 +1,5 @@
 use self::settings::BlobSettings;
-use crate::{SIM_HEIGHT, SIM_WIDTH};
+use crate::config::{SIM_HEIGHT, SIM_WIDTH};
 use num_traits::ToPrimitive;
 use rand::{Rng, RngExt};
 use std::f32::consts::{PI, TAU};
@@ -29,8 +29,8 @@ impl Blob {
     pub fn displayed_color(&self) -> u32 {
         let direction_x = self.angle.cos();
         let [red, green, blue] = self.settings.color().map(|rgb_channel| {
-            let spacing = rgb_channel.min(u8::MAX - rgb_channel);
-            let value = f32::from(rgb_channel) + direction_x * f32::from(spacing);
+            let spacing = rgb_channel.min(u8::MAX.saturating_sub(rgb_channel));
+            let value = direction_x.mul_add(f32::from(spacing), f32::from(rgb_channel));
 
             // Keep the base rgb_channel if the angle is not finite.
             value.to_u8().unwrap_or(rgb_channel)
@@ -39,8 +39,8 @@ impl Blob {
         u32::from_be_bytes([0, red, green, blue])
     }
 
-    pub fn next_step(&mut self, trail_map: &[u32], rng: &mut impl Rng) {
-        self.recalculate_angle(trail_map, rng);
+    pub fn next_step(&mut self, trail_pixels: &[u32], rng: &mut impl Rng) {
+        self.recalculate_angle(trail_pixels, rng);
         self.r#move(rng);
     }
 
@@ -64,11 +64,11 @@ impl Blob {
         self.position.y = pos_y;
     }
 
-    fn recalculate_angle(&mut self, trail_map: &[u32], rng: &mut impl Rng) {
+    fn recalculate_angle(&mut self, trail_pixels: &[u32], rng: &mut impl Rng) {
         let (forward_weight, left_weight, right_weight) = (
-            self.sense(trail_map, 0f32),
-            self.sense(trail_map, self.settings.sensor().angle_spacing()),
-            self.sense(trail_map, -self.settings.sensor().angle_spacing()),
+            self.sense(trail_pixels, 0f32),
+            self.sense(trail_pixels, self.settings.sensor().angle_spacing()),
+            self.sense(trail_pixels, -self.settings.sensor().angle_spacing()),
         );
 
         let random_steer_strength = rng.random::<f32>();
@@ -85,7 +85,7 @@ impl Blob {
         };
     }
 
-    fn sense(&self, trail_map: &[u32], angle_offset: f32) -> Option<f32> {
+    fn sense(&self, trail_pixels: &[u32], angle_offset: f32) -> Option<f32> {
         let sensor_angle = self.angle + angle_offset;
         let (direction_y, direction_x) = sensor_angle.sin_cos();
 
@@ -110,7 +110,8 @@ impl Blob {
                 let index = y
                     .checked_mul(usize::from(SIM_WIDTH.get()))?
                     .checked_add(x)?;
-                trail_map.get(index)?.to_f32()
+
+                trail_pixels.get(index)?.to_f32()
             })
             .reduce(|a, b| a + b)
     }

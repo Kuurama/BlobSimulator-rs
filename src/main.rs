@@ -1,40 +1,18 @@
-use rayon::iter::IndexedParallelIterator;
 pub mod blob;
+mod config;
+mod trail_map;
 
-use crate::blob::{BlobGroup, Position};
-use num_traits::{MulAdd, ToPrimitive};
-use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
+use crate::blob::BlobGroup;
+use crate::config::{BLOB_COUNT, BLOB_SPAWN_RADIUS, SIM_HEIGHT, SIM_WIDTH};
+use crate::trail_map::TrailMap;
 use softbuffer::Surface;
 use std::error::Error;
-use std::num::NonZero;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::WindowEvent;
 use winit::event_loop::EventLoop;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, OwnedDisplayHandle};
 use winit::window::{Window, WindowAttributes, WindowId};
-
-#[allow(clippy::unwrap_used, reason = "checked at compile time")]
-const WINDOW_WIDTH: NonZero<u16> = NonZero::new(256).unwrap();
-
-#[allow(clippy::unwrap_used, reason = "checked at compile time")]
-const WINDOW_HEIGHT: NonZero<u16> = NonZero::new(144).unwrap();
-
-/*#[allow(
-    clippy::as_conversions,
-    reason = "u16 values are exactly representable as f32"
-)]
-const SCREEN_RATIO: f32 = (WINDOW_WIDTH.get() as f32) / (WINDOW_HEIGHT.get() as f32);*/
-
-#[allow(clippy::unwrap_used, reason = "checked at compile time")]
-const SIM_SCALE_MULTIPLIER: NonZero<u16> = NonZero::new(10).unwrap();
-const SIM_WIDTH: NonZero<u16> = WINDOW_WIDTH.saturating_mul(SIM_SCALE_MULTIPLIER);
-const SIM_HEIGHT: NonZero<u16> = WINDOW_HEIGHT.saturating_mul(SIM_SCALE_MULTIPLIER);
-
-#[allow(clippy::as_conversions, reason = "u16 always fits in usize")]
-const SIM_SIZE: usize = (SIM_WIDTH.get() as usize) * (SIM_HEIGHT.get() as usize);
-
-const BLOB_COUNT: u32 = 250_000;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let event_loop = EventLoop::new()?;
@@ -49,8 +27,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 struct App {
     surface: Option<Surface<OwnedDisplayHandle, Box<dyn Window>>>,
     blob_group: BlobGroup,
-    trail_map: Box<[u32]>,
-    iteration_count: u32,
+    trail_map: TrailMap,
 }
 
 impl ApplicationHandler for App {
@@ -59,18 +36,27 @@ impl ApplicationHandler for App {
             return;
         }
 
-        let (Ok(window), Ok(context)) = (
-            event_loop.create_window(
-                WindowAttributes::default()
-                    .with_title("BlobSimulator-rs")
-                    .with_surface_size(PhysicalSize::new(SIM_WIDTH.get(), SIM_HEIGHT.get()))
-                    .with_resizable(false),
-            ),
-            softbuffer::Context::new(event_loop.owned_display_handle()),
-        ) else {
-            eprintln!("Failed to create window and/or context");
-            event_loop.exit();
-            return;
+        let window = match event_loop.create_window(
+            WindowAttributes::default()
+                .with_title("BlobSimulator-rs")
+                .with_surface_size(PhysicalSize::new(SIM_WIDTH.get(), SIM_HEIGHT.get()))
+                .with_resizable(false),
+        ) {
+            Ok(window) => window,
+            Err(error) => {
+                eprintln!("Failed to create window: {error}");
+                event_loop.exit();
+                return;
+            }
+        };
+
+        let context = match softbuffer::Context::new(event_loop.owned_display_handle()) {
+            Ok(context) => context,
+            Err(error) => {
+                eprintln!("Failed to create rendering context: {error}");
+                event_loop.exit();
+                return;
+            }
         };
 
         self.surface = match Surface::new(&context, window) {
@@ -81,8 +67,6 @@ impl ApplicationHandler for App {
                     return;
                 }
 
-                self.trail_map = surface.buffer_mut().unwrap().to_vec().into_boxed_slice();
-
                 Some(surface)
             }
             Err(error) => {
@@ -92,7 +76,7 @@ impl ApplicationHandler for App {
             }
         };
 
-        self.blob_group = match BlobGroup::create_in_circle(BLOB_COUNT, 250) {
+        self.blob_group = match BlobGroup::create_in_circle(BLOB_COUNT, BLOB_SPAWN_RADIUS) {
             Ok(group) => group,
             Err(error) => {
                 eprintln!("Failed to create the blobs: {error}");
@@ -119,31 +103,6 @@ impl ApplicationHandler for App {
 
                 surface.window().pre_present_notify();
 
-                self.blob_group.blobs.par_iter_mut().for_each_init(
-                    || rand::rng(),
-                    |rng, blob| blob.next_step(&self.trail_map, rng),
-                );
-
-                for blob in &self.blob_group.blobs {
-                    let Position { x, y } = blob.position();
-                    let (Some(x), Some(y)) = (x.to_usize(), y.to_usize()) else {
-                        continue;
-                    };
-
-                    if let Some(pixel) = self
-                        .trail_map
-                        .get_mut(y.mul_add(usize::from(SIM_WIDTH.get()), x))
-                    {
-                        *pixel = blob.displayed_color();
-                    } else {
-                        eprintln!("Blob shouldn't go outside the Simulation bounds");
-                        event_loop.exit();
-                        return;
-                    }
-                }
-
-                const EVAPORATION: u8 = 1;
-
                 let mut buffer = match surface.buffer_mut() {
                     Ok(buffer) => buffer,
                     Err(error) => {
@@ -153,83 +112,14 @@ impl ApplicationHandler for App {
                     }
                 };
 
-                let source: &[u32] = &self.trail_map;
-                let destination: &mut [u32] = &mut buffer;
+                self.blob_group.step(self.trail_map.pixels());
+                if let Err(error) = self.trail_map.deposit(self.blob_group.blobs()) {
+                    eprintln!("Failed to deposit blobs: {error}");
+                    event_loop.exit();
+                    return;
+                }
 
-                let evaporation = if self.iteration_count % 2 == 0 {
-                    EVAPORATION
-                } else {
-                    0
-                };
-                self.iteration_count += 1;
-
-                destination.par_iter_mut().enumerate().for_each(|tuple| {
-                    let (i, pixel) = tuple;
-
-                    let totals = [
-                        // Top-left
-                        i.checked_sub(1 + usize::from(SIM_WIDTH.get()))
-                            .and_then(|x| source.get(x)),
-                        // Top-middle
-                        i.checked_sub(usize::from(SIM_WIDTH.get()))
-                            .and_then(|x| source.get(x)),
-                        // Top-right
-                        i.checked_add(1)
-                            .and_then(|x| x.checked_sub(usize::from(SIM_WIDTH.get())))
-                            .and_then(|x| source.get(x)),
-                        // Center-left
-                        i.checked_sub(1).and_then(|x| source.get(x)),
-                        // Center-middle
-                        source.get(i),
-                        // Center-right
-                        i.checked_add(1).and_then(|x| source.get(x)),
-                        // Bottom-left
-                        i.checked_sub(1)
-                            .and_then(|x| x.checked_add(usize::from(SIM_WIDTH.get())))
-                            .and_then(|x| source.get(x)),
-                        // Bottom-middle
-                        i.checked_add(usize::from(SIM_WIDTH.get()))
-                            .and_then(|x| source.get(x)),
-                        // Bottom-right
-                        i.checked_add(1 + usize::from(SIM_WIDTH.get()))
-                            .and_then(|x| source.get(x)),
-                    ]
-                    .iter()
-                    .flatten()
-                    .fold([0u16; 4], |acc, elem| {
-                        let [_, red, green, blue] = elem.to_be_bytes();
-                        [
-                            // Store count as [0]
-                            acc[0] + 1,
-                            acc[1] + u16::from(red),
-                            acc[2] + u16::from(green),
-                            acc[3] + u16::from(blue),
-                        ]
-                    });
-
-                    let count = totals[0];
-
-                    *pixel = u32::from_be_bytes([
-                        0,
-                        totals[1]
-                            .saturating_div(count)
-                            .saturating_sub(u16::from(evaporation))
-                            .to_u8()
-                            .unwrap(),
-                        totals[2]
-                            .saturating_div(count)
-                            .saturating_sub(u16::from(evaporation))
-                            .to_u8()
-                            .unwrap(),
-                        totals[3]
-                            .saturating_div(count)
-                            .saturating_sub(u16::from(evaporation))
-                            .to_u8()
-                            .unwrap(),
-                    ]);
-                });
-
-                self.trail_map.copy_from_slice(&buffer);
+                self.trail_map.blur_and_evaporate_into(&mut buffer);
 
                 if let Err(error) = buffer.present() {
                     eprintln!("Failed to present: {error}");

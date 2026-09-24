@@ -1,4 +1,4 @@
-use crate::{SIM_HEIGHT, SIM_WIDTH};
+use crate::config::{SIM_HEIGHT, SIM_WIDTH};
 
 pub struct Position {
     pub x: f32,
